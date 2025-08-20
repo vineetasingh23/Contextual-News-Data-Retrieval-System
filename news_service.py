@@ -400,7 +400,7 @@ class NewsService:
     def _format_article(self, article: NewsArticle) -> dict:
         """Format article for API response"""
         return {
-            "id": str(article.id),
+            "id": article.id,  # Keep as UUID, not string
             "title": article.title,
             "description": article.description,
             "url": article.url,

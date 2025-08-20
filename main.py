@@ -5,13 +5,16 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
+import time
+import uuid
 
 from database import get_db, create_tables
 from models import NewsArticle, UserInteraction
 from schemas import (
-    NewsQuery, NewsResponse,
+    NewsQuery, NewsResponse, ArticleBase,
     CategoryResponse, SearchResponse, SourceResponse,
-    NearbyResponse, TrendingResponse
+    NearbyResponse, TrendingResponse, FlexibleSearchResponse,
+    ErrorResponse, HealthResponse
 )
 from news_service import NewsService
 from llm_service import GoogleCloudLLMService
@@ -41,16 +44,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """Handle Pydantic validation errors with proper 422 status code"""
     return JSONResponse(
         status_code=422,
-        content={
-            "detail": "Validation error",
-            "errors": exc.errors(),
-            "body": exc.body
-        }
+        content=ErrorResponse(
+            error_code="VALIDATION_ERROR",
+            error_message="Validation error",
+            details={"errors": exc.errors(), "body": exc.body},
+            request_id=str(uuid.uuid4())
+        ).dict()
     )
 
 # Services
 news_service = NewsService()
 llm_service = GoogleCloudLLMService()
+startup_time = time.time()
 
 @app.on_event("startup")
 async def startup_event():
@@ -74,14 +79,38 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Startup error: {e}")
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Simple health check endpoint"""
-    return {"status": "healthy"}
+    try:
+        # Check database connection
+        db = next(get_db())
+        db_status = "connected" if db else "disconnected"
+        db.close()
+        
+        # Check LLM service
+        llm_status = "available" if llm_service else "unavailable"
+        
+        return HealthResponse(
+            status="healthy",
+            database_status=db_status,
+            llm_service_status=llm_status,
+            uptime_seconds=time.time() - startup_time
+        )
+    except Exception as e:
+        return HealthResponse(
+            status="unhealthy",
+            database_status="error",
+            llm_service_status="error",
+            uptime_seconds=time.time() - startup_time
+        )
 
 @app.post("/api/v1/news/query", response_model=NewsResponse)
 async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
     """Main endpoint for natural language news queries"""
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+    
     try:
         # Validate query data
         if not query_data.query or query_data.query.strip() == "":
@@ -105,12 +134,24 @@ async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
         if not articles:
             raise HTTPException(status_code=404, detail="No articles found matching your query")
         
+        processing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+        
         return NewsResponse(
             articles=articles,
             query=query_data.query,
             intent=analysis["intent"],
             entities=analysis["entities"],
-            total_results=len(articles)
+            confidence=analysis.get("confidence", 0.0),
+            processing_time_ms=processing_time,
+            total_results=len(articles),
+            limit=len(articles),
+            query_info={
+                "user_location": {
+                    "latitude": query_data.user_latitude,
+                    "longitude": query_data.user_longitude
+                },
+                "analysis_confidence": analysis.get("confidence", 0.0)
+            }
         )
         
     except HTTPException:
@@ -119,7 +160,7 @@ async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
         logger.error(f"Query error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/api/v1/news/category", response_model=List[CategoryResponse])
+@app.get("/api/v1/news/category", response_model=CategoryResponse)
 async def get_news_by_category(
     category: str,
     lat: Optional[float] = None,
@@ -129,6 +170,9 @@ async def get_news_by_category(
     db: Session = Depends(get_db)
 ):
     """Get news articles by category with optional location filtering"""
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+    
     try:
         if not category or category.strip() == "":
             raise HTTPException(status_code=400, detail="Category parameter is required")
@@ -156,14 +200,25 @@ async def get_news_by_category(
             location_msg = f" near ({lat}, {lon})" if lat is not None and lon is not None else ""
             raise HTTPException(status_code=404, detail=f"No articles found for category: {category}{location_msg}")
         
-        return articles
+        processing_time = (time.time() - start_time) * 1000
+        
+        return CategoryResponse(
+            category=category,
+            articles=articles,
+            total_results=len(articles),
+            limit=limit,
+            filters_applied={
+                "location": {"lat": lat, "lon": lon, "radius": radius} if lat and lon else None,
+                "category": category
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Category error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/api/v1/news/search", response_model=List[SearchResponse])
+@app.get("/api/v1/news/search", response_model=SearchResponse)
 async def search_news(
     query: str,
     lat: Optional[float] = None,
@@ -173,6 +228,9 @@ async def search_news(
     db: Session = Depends(get_db)
 ):
     """Search news articles by text query with optional location filtering"""
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+    
     try:
         if not query or query.strip() == "":
             raise HTTPException(status_code=400, detail="Search query is required")
@@ -200,14 +258,25 @@ async def search_news(
             location_msg = f" near ({lat}, {lon})" if lat is not None and lon is not None else ""
             raise HTTPException(status_code=404, detail=f"No articles found for query: {query}{location_msg}")
         
-        return articles
+        processing_time = (time.time() - start_time) * 1000
+        
+        return SearchResponse(
+            search_query=query,
+            articles=articles,
+            total_results=len(articles),
+            limit=limit,
+            filters_applied={
+                "location": {"lat": lat, "lon": lon, "radius": radius} if lat and lon else None,
+                "query": query
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Search error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/api/v1/news/source", response_model=List[SourceResponse])
+@app.get("/api/v1/news/source", response_model=SourceResponse)
 async def get_news_by_source(
     source: str,
     lat: Optional[float] = None,
@@ -217,6 +286,9 @@ async def get_news_by_source(
     db: Session = Depends(get_db)
 ):
     """Get news articles by source with optional location filtering"""
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+    
     try:
         if not source or source.strip() == "":
             raise HTTPException(status_code=400, detail="Source parameter is required")
@@ -244,14 +316,25 @@ async def get_news_by_source(
             location_msg = f" near ({lat}, {lon})" if lat is not None and lon is not None else ""
             raise HTTPException(status_code=404, detail=f"No articles found for source: {source}{location_msg}")
         
-        return articles
+        processing_time = (time.time() - start_time) * 1000
+        
+        return SourceResponse(
+            source=source,
+            articles=articles,
+            total_results=len(articles),
+            limit=limit,
+            filters_applied={
+                "location": {"lat": lat, "lon": lon, "radius": radius} if lat and lon else None,
+                "source": source
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Source error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/api/v1/news/nearby", response_model=List[NearbyResponse])
+@app.get("/api/v1/news/nearby", response_model=NearbyResponse)
 async def get_nearby_news(
     lat: float,
     lon: float,
@@ -260,6 +343,9 @@ async def get_nearby_news(
     db: Session = Depends(get_db)
 ):
     """Get news articles near a specific location"""
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+    
     try:
         if not (-90 <= lat <= 90):
             raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
@@ -278,7 +364,18 @@ async def get_nearby_news(
         if not articles:
             raise HTTPException(status_code=404, detail="No articles found in the specified radius")
         
-        return articles
+        processing_time = (time.time() - start_time) * 1000
+        
+        return NearbyResponse(
+            location={"latitude": lat, "longitude": lon},
+            radius_km=radius,
+            articles=articles,
+            total_results=len(articles),
+            limit=limit,
+            filters_applied={
+                "location": {"lat": lat, "lon": lon, "radius": radius}
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -294,6 +391,9 @@ async def get_trending_news(
     db: Session = Depends(get_db)
 ):
     """Get trending news articles for a location"""
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+    
     try:
         if not (-90 <= lat <= 90):
             raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
@@ -312,14 +412,27 @@ async def get_trending_news(
         if result["total_results"] == 0:
             raise HTTPException(status_code=404, detail="No trending articles found for this location")
         
-        return result
+        processing_time = (time.time() - start_time) * 1000
+        
+        return TrendingResponse(
+            articles=result["articles"],
+            trending_scores=result["trending_scores"],
+            location_cluster=result["location_cluster"],
+            calculation_method="multi-factor scoring with location clustering",
+            total_results=result["total_results"],
+            limit=limit,
+            filters_applied={
+                "location": {"lat": lat, "lon": lon},
+                "trending_algorithm": "user_interaction_based"
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Trending error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/api/v1/news/flexible", response_model=List[SearchResponse])
+@app.get("/api/v1/news/flexible", response_model=FlexibleSearchResponse)
 async def flexible_news_search(
     query: Optional[str] = None,
     category: Optional[str] = None,
@@ -333,6 +446,9 @@ async def flexible_news_search(
     db: Session = Depends(get_db)
 ):
     """Flexible news search with multiple optional parameters (demonstrates query parameter flexibility)"""
+    start_time = time.time()
+    request_id = str(uuid.uuid4())
+    
     try:
         # At least one search criteria must be provided
         if not any([query, category, source, lat, lon, min_score, max_score]):
@@ -387,7 +503,26 @@ async def flexible_news_search(
             criteria_str = ", ".join(criteria)
             raise HTTPException(status_code=404, detail=f"No articles found matching criteria: {criteria_str}")
         
-        return articles
+        processing_time = (time.time() - start_time) * 1000
+        
+        return FlexibleSearchResponse(
+            articles=articles,
+            total_results=len(articles),
+            limit=limit,
+            search_criteria={
+                "query": query,
+                "category": category,
+                "source": source,
+                "location": {"lat": lat, "lon": lon, "radius": radius} if lat and lon else None,
+                "score_range": {"min": min_score, "max": max_score} if min_score or max_score else None
+            },
+            filters_applied={
+                "location": {"lat": lat, "lon": lon, "radius": radius} if lat and lon else None,
+                "category": category,
+                "source": source,
+                "score_range": {"min": min_score, "max": max_score} if min_score or max_score else None
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
