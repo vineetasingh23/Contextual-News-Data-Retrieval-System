@@ -1,5 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
@@ -32,6 +34,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Exception handlers
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle Pydantic validation errors with proper 422 status code"""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Validation error",
+            "errors": exc.errors(),
+            "body": exc.body
+        }
+    )
 
 # Services
 news_service = NewsService()
@@ -68,6 +83,16 @@ async def health_check():
 async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
     """Main endpoint for natural language news queries"""
     try:
+        # Validate query data
+        if not query_data.query or query_data.query.strip() == "":
+            raise HTTPException(status_code=400, detail="Query text is required")
+        
+        if not (-90 <= query_data.user_latitude <= 90):
+            raise HTTPException(status_code=400, detail="User latitude must be between -90 and 90")
+        
+        if not (-180 <= query_data.user_longitude <= 180):
+            raise HTTPException(status_code=400, detail="User longitude must be between -180 and 180")
+        
         # Analyze the query using LLM
         analysis = llm_service.analyze_query(query_data.query)
         
@@ -77,6 +102,9 @@ async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
             query_data.user_latitude, query_data.user_longitude
         )
         
+        if not articles:
+            raise HTTPException(status_code=404, detail="No articles found matching your query")
+        
         return NewsResponse(
             articles=articles,
             query=query_data.query,
@@ -85,6 +113,8 @@ async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
             total_results=len(articles)
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Query error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -97,8 +127,20 @@ async def get_news_by_category(
 ):
     """Get news articles by category"""
     try:
+        if not category or category.strip() == "":
+            raise HTTPException(status_code=400, detail="Category parameter is required")
+        
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+        
         articles = news_service.get_articles_by_category(db, category, limit)
+        
+        if not articles:
+            raise HTTPException(status_code=404, detail=f"No articles found for category: {category}")
+        
         return articles
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Category error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -111,8 +153,20 @@ async def search_news(
 ):
     """Search news articles by text query"""
     try:
+        if not query or query.strip() == "":
+            raise HTTPException(status_code=400, detail="Search query is required")
+        
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+        
         articles = news_service.search_articles(db, query, limit)
+        
+        if not articles:
+            raise HTTPException(status_code=404, detail=f"No articles found for query: {query}")
+        
         return articles
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Search error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -125,8 +179,20 @@ async def get_news_by_source(
 ):
     """Get news articles by source"""
     try:
+        if not source or source.strip() == "":
+            raise HTTPException(status_code=400, detail="Source parameter is required")
+        
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+        
         articles = news_service.get_articles_by_source(db, source, limit)
+        
+        if not articles:
+            raise HTTPException(status_code=404, detail=f"No articles found for source: {source}")
+        
         return articles
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Source error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -141,8 +207,26 @@ async def get_nearby_news(
 ):
     """Get news articles near a specific location"""
     try:
+        if not (-90 <= lat <= 90):
+            raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
+        
+        if not (-180 <= lon <= 180):
+            raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180")
+        
+        if radius < 0.1 or radius > 1000:
+            raise HTTPException(status_code=400, detail="Radius must be between 0.1 and 1000 km")
+        
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+        
         articles = news_service.get_nearby_articles(db, lat, lon, radius, limit)
+        
+        if not articles:
+            raise HTTPException(status_code=404, detail="No articles found in the specified radius")
+        
         return articles
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Nearby error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -157,11 +241,26 @@ async def get_trending_news(
 ):
     """Get trending news articles for a location"""
     try:
+        if not (-90 <= lat <= 90):
+            raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
+        
+        if not (-180 <= lon <= 180):
+            raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180")
+        
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+        
         if force_refresh:
             news_service.clear_trending_cache()
         
         result = news_service.get_trending_articles(db, lat, lon, limit)
+        
+        if result["total_results"] == 0:
+            raise HTTPException(status_code=404, detail="No trending articles found for this location")
+        
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Trending error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
