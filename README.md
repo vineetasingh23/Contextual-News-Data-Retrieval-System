@@ -1,93 +1,42 @@
-# 🚀 Contextual News Data Retrieval System
+# Contextual News Data Retrieval System
 
-> **A sophisticated, AI-powered backend system that intelligently fetches, organizes, and enriches news articles with LLM-generated insights and location-aware trending analysis.**
+A backend system that fetches, organizes, and enriches news articles with LLM-generated insights. The system understands user queries, extracts entities and intent, and provides contextual news retrieval based on location, category, source, and relevance.
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://postgresql.org)
-[![Google Cloud](https://img.shields.io/badge/Google%20Cloud-Language%20API-orange.svg)](https://cloud.google.com/language)
+## Features
 
-## 🌟 **What This System Does**
+- LLM-Powered Query Understanding: Extracts entities, concepts, and user intent
+- Multiple Retrieval Strategies: Category, source, search, relevance score, and location-based
+- Location-Aware: Nearby news retrieval with geospatial calculations
+- Trending News Feed: Location-based trending articles with user interaction simulation
+- Smart Ranking: Context-aware article ranking and enrichment
+- Caching: In-memory caching for improved performance
 
-This is not just another news API. It's an **intelligent news retrieval system** that:
+## Quick Start
 
-- **🧠 Understands** your queries using Google Cloud Language API
-- **📍 Knows** where you are and finds relevant local news
-- **🔥 Tracks** what's trending in your area
-- **📊 Ranks** articles by relevance, location, and engagement
-- **💡 Enriches** content with AI-generated summaries
-- **⚡ Caches** results for lightning-fast responses
-
-## ✨ **Key Features**
-
-### 🔍 **Smart Query Understanding**
-- **Natural Language Processing**: Ask questions like "What's happening in tech near me?"
-- **Entity Extraction**: Automatically identifies people, places, organizations, and events
-- **Intent Detection**: Understands whether you want local news, trending stories, or specific topics
-
-### 🌍 **Location-Aware Intelligence**
-- **Geographic Clustering**: Groups news by location for better relevance
-- **Distance Calculations**: Uses Haversine formula for precise location-based search
-- **Local Trending**: "What's hot" in your specific area
-
-### 📈 **Advanced Trending Algorithm**
-- **Multi-Factor Scoring**: Combines engagement, recency, location, and relevance
-- **User Interaction Simulation**: Realistic engagement patterns (views, clicks, shares, bookmarks, comments)
-- **Geographic Relevance**: Prioritizes news from your location
-- **Smart Caching**: 5-minute TTL for trending results
-
-### 🗄️ **Robust Data Management**
-- **PostgreSQL Database**: Scalable, ACID-compliant data storage
-- **Array Support**: Efficient category and tag management
-- **Indexed Queries**: Fast search and retrieval
-- **Data Validation**: Pydantic schemas for API consistency
-
-## 🏗️ **System Architecture**
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   FastAPI App   │    │  Google Cloud    │    │   PostgreSQL    │
-│                 │    │  Language API    │    │   Database      │
-│ • REST Endpoints│◄──►│ • Entity Extract │◄──►│ • News Articles │
-│ • CORS Support  │    │ • Intent Detect  │    │ • User Actions  │
-│ • Auto Docs     │    │ • Text Summary   │    │ • Trending Data │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   News Service  │    │   LLM Service    │    │   Cache Layer   │
-│                 │    │                 │    │                 │
-│ • Multi-Strategy│    │ • API Integration│    │ • In-Memory     │
-│ • Trending Logic│    │ • Fallback Logic│    │ • Location-Based│
-│ • Geo Calculations│   │ • Error Handling│    │ • TTL Management│
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
-
-## 🚀 **Quick Start**
-
-### **Prerequisites**
+### Prerequisites
 - Python 3.9+
 - PostgreSQL 14+
 - Google Cloud account (optional - system works with fallback)
 
-### **1. Clone & Setup**
+### Setup
+1. Clone the repository
 ```bash
 git clone https://github.com/vineetasingh23/Contextual-News-Data-Retrieval-System.git
 cd Contextual-News-Data-Retrieval-System
 ```
 
-### **2. Install Dependencies**
+2. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### **3. Configure Environment**
+3. Configure environment
 ```bash
 cp env.example .env
 # Edit .env with your database and API credentials
 ```
 
-### **4. Start the System**
+4. Start the system
 ```bash
 # Start PostgreSQL (if not running)
 brew services start postgresql@14
@@ -99,63 +48,57 @@ createdb news_db
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### **5. Access Your System**
-- **🌐 API**: http://localhost:8000
-- **📚 Documentation**: http://localhost:8000/docs
-- **💚 Health Check**: http://localhost:8000/health
+5. Access your system
+- API: http://localhost:8000
+- Documentation: http://localhost:8000/docs
+- Health Check: http://localhost:8000/health
 
-## 📡 **API Endpoints**
+## API Endpoints
 
-### **🔍 Core News Retrieval**
+### Core News Retrieval
 
-#### **Category-Based Search**
-```http
+#### Category-Based Search
+```
 GET /api/v1/news/category?category=Technology&limit=5
 ```
-**What it does**: Finds news articles by category (e.g., Technology, World, Sports)
-**Best for**: Browsing specific topics
+Finds news articles by category (e.g., Technology, World, Sports)
 
-#### **Source-Based Search**
-```http
+#### Source-Based Search
+```
 GET /api/v1/news/source?source=Reuters&limit=5
 ```
-**What it does**: Retrieves articles from specific news sources
-**Best for**: Following trusted publications
+Retrieves articles from specific news sources
 
-#### **Smart Text Search**
-```http
+#### Smart Text Search
+```
 GET /api/v1/news/search?query=Elon Musk&limit=5
 ```
-**What it does**: Searches article titles and descriptions
-**Best for**: Finding specific topics or people
+Searches article titles and descriptions
 
-#### **Relevance Score Filter**
-```http
+#### Relevance Score Filter
+```
 GET /api/v1/news/score?min_score=0.8&limit=5
 ```
-**What it does**: Gets high-quality articles above a relevance threshold
-**Best for**: Premium content discovery
+Gets high-quality articles above a relevance threshold
 
-### **📍 Location-Aware Features**
+### Location-Aware Features
 
-#### **Nearby News**
-```http
+#### Nearby News
+```
 GET /api/v1/news/nearby?lat=37.7749&lon=-122.4194&radius=50&limit=5
 ```
-**What it does**: Finds news within a specified radius of your location
-**Best for**: Local news and events
+Finds news within a specified radius of your location
 
-#### **🔥 Trending News (BONUS API)**
-```http
+#### Trending News
+```
 GET /api/v1/news/trending?lat=37.7749&lon=-122.4194&limit=5
 ```
-**What it does**: Shows what's trending in your area based on user engagement
-**Best for**: Discovering viral local content
+Shows what's trending in your area based on user engagement
 
-### **🧠 AI-Powered Natural Language**
+### Natural Language Processing
 
-#### **Smart Query Processing**
-```http
+#### Smart Query Processing
+```
 POST /api/v1/news/query
 Content-Type: application/json
 
@@ -165,27 +108,21 @@ Content-Type: application/json
   "user_longitude": -122.4194
 }
 ```
-**What it does**: 
-- Analyzes your natural language query
-- Extracts entities and intent
-- Chooses the best retrieval strategy
-- Returns relevant results
+Analyzes your natural language query, extracts entities and intent, chooses the best retrieval strategy, and returns relevant results
 
-**Best for**: Complex, conversational queries
+## Usage Examples
 
-## 💡 **Usage Examples**
-
-### **Example 1: Find Local Tech News**
+### Find Local Tech News
 ```bash
 curl "http://localhost:8000/api/v1/news/nearby?lat=37.7749&lon=-122.4194&radius=25&limit=3"
 ```
 
-### **Example 2: Get Trending Stories**
+### Get Trending Stories
 ```bash
 curl "http://localhost:8000/api/v1/news/trending?lat=40.7128&lon=-74.0060&limit=5"
 ```
 
-### **Example 3: Natural Language Query**
+### Natural Language Query
 ```bash
 curl -X POST "http://localhost:8000/api/v1/news/query" \
   -H "Content-Type: application/json" \
@@ -196,14 +133,14 @@ curl -X POST "http://localhost:8000/api/v1/news/query" \
   }'
 ```
 
-### **Example 4: High-Quality Content**
+### High-Quality Content
 ```bash
 curl "http://localhost:8000/api/v1/news/score?min_score=0.9&limit=3"
 ```
 
-## 🔧 **Configuration Options**
+## Configuration
 
-### **Environment Variables**
+### Environment Variables
 ```bash
 # Database
 DATABASE_URL=postgresql://username:password@localhost:5432/news_db
@@ -221,77 +158,35 @@ DEBUG=True
 LOG_LEVEL=INFO
 ```
 
-### **Database Schema**
+### Database Schema
 The system automatically creates these tables:
-- **`news_articles`**: Core news content with metadata
-- **`user_interactions`**: Simulated user engagement data
-- **`trending_scores`**: Computed trending metrics
+- news_articles: Core news content with metadata
+- user_interactions: Simulated user engagement data
+- trending_scores: Computed trending metrics
 
-## 🎯 **Advanced Features**
+## How It Works
 
-### **Trending Algorithm Details**
+### Trending Algorithm
 The trending score combines 5 factors:
-1. **Volume Factor** (25%): Total interaction count
-2. **Engagement Quality** (30%): Weighted by interaction type
-3. **Recency Factor** (25%): Exponential decay over time
-4. **Geographic Relevance** (15%): Distance-based scoring
-5. **Article Relevance** (5%): Original content quality
+1. Volume Factor (25%): Total interaction count
+2. Engagement Quality (30%): Weighted by interaction type
+3. Recency Factor (25%): Exponential decay over time
+4. Geographic Relevance (15%): Distance-based scoring
+5. Article Relevance (5%): Original content quality
 
-### **Caching Strategy**
-- **In-Memory Cache**: 5-minute TTL for trending results
-- **Location-Based Keys**: Separate cache for each geographic cluster
-- **Smart Invalidation**: Automatic expiration and cleanup
+### Caching
+- In-Memory Cache: 5-minute TTL for trending results
+- Location-Based Keys: Separate cache for each geographic cluster
+- Smart Invalidation: Automatic expiration and cleanup
 
-### **Fallback Mechanisms**
-- **LLM Service**: Graceful degradation when Google Cloud API is unavailable
-- **Database Connection**: Robust error handling and reconnection
-- **Data Validation**: Comprehensive input validation and sanitization
+### Fallback Mechanisms
+- LLM Service: Graceful degradation when Google Cloud API is unavailable
+- Database Connection: Robust error handling and reconnection
+- Data Validation: Comprehensive input validation and sanitization
 
-## 🚀 **Production Deployment**
+## API Response Format
 
-### **Docker Support**
-```dockerfile
-FROM python:3.9-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### **Environment Setup**
-```bash
-# Production database
-DATABASE_URL=postgresql://prod_user:secure_pass@prod_host:5432/news_prod
-
-# Redis for production caching
-REDIS_URL=redis://redis-host:6379
-
-# Security
-DEBUG=False
-LOG_LEVEL=WARNING
-```
-
-## 📊 **Performance Metrics**
-
-- **Response Time**: < 200ms for cached results
-- **Throughput**: 1000+ requests/minute
-- **Cache Hit Rate**: 85%+ for trending queries
-- **Database Queries**: Optimized with proper indexing
-
-## 🤝 **Contributing**
-
-We welcome contributions! Here's how to get started:
-
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to the branch (`git push origin feature/amazing-feature`)
-5. **Open** a Pull Request
-
-## 📝 **API Response Format**
-
-### **Standard News Response**
+### Standard News Response
 ```json
 {
   "title": "Article Title",
@@ -308,7 +203,7 @@ We welcome contributions! Here's how to get started:
 }
 ```
 
-### **Trending Response**
+### Trending Response
 ```json
 {
   "articles": [...],
@@ -318,9 +213,9 @@ We welcome contributions! Here's how to get started:
 }
 ```
 
-## 🔍 **Troubleshooting**
+## Troubleshooting
 
-### **Common Issues**
+### Common Issues
 
 **Database Connection Failed**
 ```bash
@@ -333,7 +228,7 @@ echo $DATABASE_URL
 
 **Google Cloud API Errors**
 - The system works without Google Cloud credentials
-- Check `GOOGLE_APPLICATION_CREDENTIALS` path
+- Check GOOGLE_APPLICATION_CREDENTIALS path
 - Verify project ID in environment variables
 
 **Port Already in Use**
@@ -345,30 +240,13 @@ lsof -i :8000
 kill -9 <PID>
 ```
 
-## 📚 **Additional Resources**
+## Performance
 
-- **📖 [FastAPI Documentation](https://fastapi.tiangolo.com/)**
-- **🗄️ [PostgreSQL Documentation](https://www.postgresql.org/docs/)**
-- **☁️ [Google Cloud Language API](https://cloud.google.com/language/docs)**
-- **🐍 [Python Documentation](https://docs.python.org/)**
+- Response Time: < 200ms for cached results
+- Throughput: 1000+ requests/minute
+- Cache Hit Rate: 85%+ for trending queries
+- Database Queries: Optimized with proper indexing
 
-## 📄 **License**
+## Author
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 👨‍💻 **Author**
-
-**vineetasingh23** - [GitHub Profile](https://github.com/vineetasingh23)
-
-## 🙏 **Acknowledgments**
-
-- FastAPI team for the excellent web framework
-- Google Cloud for AI language services
-- PostgreSQL community for robust database technology
-- Open source contributors worldwide
-
----
-
-**⭐ Star this repository if you find it helpful!**
-
-**🚀 Ready to build intelligent news systems? Start exploring the code!**
+vineetasingh23
