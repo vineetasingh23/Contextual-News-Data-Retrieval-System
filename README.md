@@ -223,22 +223,154 @@ curl "http://localhost:8006/health"
 - Swagger UI: http://localhost:8006/docs
 - ReDoc: http://localhost:8006/redoc
 
-### Example Queries
+### Step-by-Step Testing Guide
+
+#### Prerequisites Check
 ```bash
-# Search for technology news
-curl "http://localhost:8006/api/v1/news/search?query=technology&limit=5"
+# Check Python version
+python3 --version
 
-# Get news by category
-curl "http://localhost:8006/api/v1/news/category?category=Technology&limit=10"
+# Check if PostgreSQL is running
+brew services list | grep postgresql
+```
 
-# Find nearby news
-curl "http://localhost:8006/api/v1/news/nearby?lat=19.076&lon=72.877&radius=100"
+#### 1. Health Check
+```bash
+curl "http://localhost:8006/health"
+```
+**Expected Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-08-20T15:44:31.744963",
+  "version": "1.0.0",
+  "database_status": "connected",
+  "llm_service_status": "available",
+  "uptime_seconds": 13.253198146820068
+}
+```
 
-# Natural language query
+#### 2. Basic Endpoint Tests
+```bash
+# Test category endpoint
+curl "http://localhost:8006/api/v1/news/category?category=General&limit=2"
+
+# Test search endpoint
+curl "http://localhost:8006/api/v1/news/search?query=news&limit=1"
+```
+
+#### 3. Location-Based Search
+```bash
+# Test nearby endpoint
+curl "http://localhost:8006/api/v1/news/nearby?lat=19.076&lon=72.877&radius=200&limit=3"
+
+# Test category with location
+curl "http://localhost:8006/api/v1/news/category?category=General&lat=19.076&lon=72.877&radius=200&limit=3"
+```
+
+#### 4. Flexible Search
+```bash
+# Test multi-criteria search
+curl "http://localhost:8006/api/v1/news/flexible?min_score=0.8&max_score=1.0&limit=2"
+
+# Test with location and score
+curl "http://localhost:8006/api/v1/news/flexible?query=news&lat=19.076&lon=72.877&radius=200&min_score=0.5&limit=3"
+```
+
+#### 5. Trending News
+```bash
+# Test trending endpoint
+curl "http://localhost:8006/api/v1/news/trending?lat=19.076&lon=72.877&limit=3"
+
+# Test with force refresh
+curl "http://localhost:8006/api/v1/news/trending?lat=19.076&lon=72.877&limit=3&force_refresh=true"
+```
+
+#### 6. Natural Language Query
+```bash
+# Test main AI endpoint
 curl -X POST "http://localhost:8006/api/v1/news/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Show me business news", "user_latitude": 19.076, "user_longitude": 72.877}'
+  -d '{"query": "Show me general news", "user_latitude": 19.076, "user_longitude": 72.877}'
 ```
+
+#### 7. Error Handling Tests
+```bash
+# Test invalid coordinates
+curl "http://localhost:8006/api/v1/news/nearby?lat=200&lon=72.877"
+
+# Test missing required parameters
+curl "http://localhost:8006/api/v1/news/category?category="
+
+# Test invalid score range
+curl "http://localhost:8006/api/v1/news/flexible?min_score=2.0&max_score=1.0"
+```
+
+### Quick Test Script
+```bash
+#!/bin/bash
+echo "Testing News API..."
+
+echo "1. Health Check..."
+curl -s "http://localhost:8006/health" | jq '.status'
+
+echo "2. Category Search..."
+curl -s "http://localhost:8006/api/v1/news/category?category=General&limit=1" | jq '.total_results'
+
+echo "3. Location Search..."
+curl -s "http://localhost:8006/api/v1/news/nearby?lat=19.076&lon=72.877&radius=200&limit=1" | jq '.total_results'
+
+echo "4. Flexible Search..."
+curl -s "http://localhost:8006/api/v1/news/flexible?min_score=0.8&limit=1" | jq '.total_results'
+
+echo "Testing complete!"
+```
+
+### What to Look For
+
+#### Success Indicators
+- ✅ All endpoints return 200 status codes
+- ✅ JSON responses are properly formatted
+- ✅ Articles contain all required fields
+- ✅ Location filtering works correctly
+- ✅ Error handling provides clear messages
+- ✅ Response times are reasonable (< 2 seconds)
+
+#### Common Issues
+- ❌ Database connection errors (check PostgreSQL)
+- ❌ Google Cloud API errors (check credentials)
+- ❌ Port already in use (change port or kill process)
+- ❌ Missing dependencies (check pip install)
+
+### Troubleshooting
+
+#### If server won't start
+```bash
+# Check if port is in use
+lsof -ti:8006 | xargs kill -9
+
+# Check Python path
+which python3
+
+# Check dependencies
+pip list | grep fastapi
+```
+
+#### If database errors
+```bash
+# Check PostgreSQL status
+brew services list | grep postgresql
+
+# Test connection
+psql -d news_db -c "SELECT 1;"
+```
+
+#### If Google Cloud errors
+- Check if service account key exists
+- Verify project ID in .env
+- Ensure Natural Language API is enabled
+
+### Example Queries
 
 ## Architecture
 
