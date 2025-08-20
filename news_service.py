@@ -1,7 +1,7 @@
 import json
 import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, or_
 from models import NewsArticle, UserInteraction, TrendingScore
 from llm_service import GoogleCloudLLMService
 from datetime import datetime, timedelta
@@ -412,3 +412,131 @@ class NewsService:
             "longitude": article.longitude,
             "llm_summary": article.llm_summary
         }
+
+    def search_articles_with_location(self, db: Session, query: str, lat: float, lon: float, radius: float, limit: int):
+        """Search articles by text query with location filtering"""
+        try:
+            # First get articles by text search
+            articles = self.search_articles(db, query, limit * 2)  # Get more to filter by location
+            
+            if not articles:
+                return []
+            
+            # Filter by location
+            location_filtered = []
+            for article in articles:
+                if article.get('latitude') and article.get('longitude'):
+                    distance = self._calculate_distance(lat, lon, article['latitude'], article['longitude'])
+                    if distance <= radius:
+                        location_filtered.append(article)
+                        if len(location_filtered) >= limit:
+                            break
+            
+            return location_filtered[:limit]
+        except Exception as e:
+            logger.error(f"Error in location-aware search: {e}")
+            return []
+
+    def get_articles_by_category_with_location(self, db: Session, category: str, lat: float, lon: float, radius: float, limit: int):
+        """Get articles by category with location filtering"""
+        try:
+            # First get articles by category
+            articles = self.get_articles_by_category(db, category, limit * 2)
+            
+            if not articles:
+                return []
+            
+            # Filter by location
+            location_filtered = []
+            for article in articles:
+                if article.get('latitude') and article.get('longitude'):
+                    distance = self._calculate_distance(lat, lon, article['latitude'], article['longitude'])
+                    if distance <= radius:
+                        location_filtered.append(article)
+                        if len(location_filtered) >= limit:
+                            break
+            
+            return location_filtered[:limit]
+        except Exception as e:
+            logger.error(f"Error in location-aware category search: {e}")
+            return []
+
+    def get_articles_by_source_with_location(self, db: Session, source: str, lat: float, lon: float, radius: float, limit: int):
+        """Get articles by source with location filtering"""
+        try:
+            # First get articles by source
+            articles = self.get_articles_by_source(db, source, limit * 2)
+            
+            if not articles:
+                return []
+            
+            # Filter by location
+            location_filtered = []
+            for article in articles:
+                if article.get('latitude') and article.get('longitude'):
+                    distance = self._calculate_distance(lat, lon, article['latitude'], article['longitude'])
+                    if distance <= radius:
+                        location_filtered.append(article)
+                        if len(location_filtered) >= limit:
+                            break
+            
+            return location_filtered[:limit]
+        except Exception as e:
+            logger.error(f"Error in location-aware source search: {e}")
+            return []
+
+    def flexible_search(self, db: Session, query: str = None, category: str = None, source: str = None, 
+                       lat: float = None, lon: float = None, radius: float = 100.0, 
+                       min_score: float = None, max_score: float = None, limit: int = 5):
+        """Flexible search with multiple criteria"""
+        try:
+            # Build base query
+            base_query = db.query(NewsArticle)
+            
+            # Apply filters
+            if query:
+                base_query = base_query.filter(
+                    or_(
+                        NewsArticle.title.ilike(f"%{query}%"),
+                        NewsArticle.description.ilike(f"%{query}%")
+                    )
+                )
+            
+            if category:
+                base_query = base_query.filter(NewsArticle.category.any(category))
+            
+            if source:
+                base_query = base_query.filter(NewsArticle.source_name.ilike(f"%{source}%"))
+            
+            if min_score is not None:
+                base_query = base_query.filter(NewsArticle.relevance_score >= min_score)
+            
+            if max_score is not None:
+                base_query = base_query.filter(NewsArticle.relevance_score <= max_score)
+            
+            # Get initial results
+            articles = base_query.order_by(desc(NewsArticle.relevance_score)).limit(limit * 2).all()
+            
+            if not articles:
+                return []
+            
+            # Convert to dict format
+            article_dicts = [self._format_article(article) for article in articles]
+            
+            # Apply location filtering if coordinates provided
+            if lat is not None and lon is not None:
+                location_filtered = []
+                for article in article_dicts:
+                    if article.get('latitude') and article.get('longitude'):
+                        distance = self._calculate_distance(lat, lon, article['latitude'], article['longitude'])
+                        if distance <= radius:
+                            location_filtered.append(article)
+                            if len(location_filtered) >= limit:
+                                break
+                return location_filtered[:limit]
+            
+            return article_dicts[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error in flexible search: {e}")
+            return []

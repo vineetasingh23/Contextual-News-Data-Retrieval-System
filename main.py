@@ -122,10 +122,13 @@ async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
 @app.get("/api/v1/news/category", response_model=List[CategoryResponse])
 async def get_news_by_category(
     category: str,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius: Optional[float] = 100.0,
     limit: int = 5,
     db: Session = Depends(get_db)
 ):
-    """Get news articles by category"""
+    """Get news articles by category with optional location filtering"""
     try:
         if not category or category.strip() == "":
             raise HTTPException(status_code=400, detail="Category parameter is required")
@@ -133,10 +136,25 @@ async def get_news_by_category(
         if limit < 1 or limit > 100:
             raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
         
-        articles = news_service.get_articles_by_category(db, category, limit)
+        # Validate location parameters if provided
+        if lat is not None and not (-90 <= lat <= 90):
+            raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
+        
+        if lon is not None and not (-180 <= lon <= 180):
+            raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180")
+        
+        if radius < 0.1 or radius > 1000:
+            raise HTTPException(status_code=400, detail="Radius must be between 0.1 and 1000 km")
+        
+        # If location is provided, use location-aware category search
+        if lat is not None and lon is not None:
+            articles = news_service.get_articles_by_category_with_location(db, category, lat, lon, radius, limit)
+        else:
+            articles = news_service.get_articles_by_category(db, category, limit)
         
         if not articles:
-            raise HTTPException(status_code=404, detail=f"No articles found for category: {category}")
+            location_msg = f" near ({lat}, {lon})" if lat is not None and lon is not None else ""
+            raise HTTPException(status_code=404, detail=f"No articles found for category: {category}{location_msg}")
         
         return articles
     except HTTPException:
@@ -148,10 +166,13 @@ async def get_news_by_category(
 @app.get("/api/v1/news/search", response_model=List[SearchResponse])
 async def search_news(
     query: str,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius: Optional[float] = 100.0,
     limit: int = 5,
     db: Session = Depends(get_db)
 ):
-    """Search news articles by text query"""
+    """Search news articles by text query with optional location filtering"""
     try:
         if not query or query.strip() == "":
             raise HTTPException(status_code=400, detail="Search query is required")
@@ -159,10 +180,25 @@ async def search_news(
         if limit < 1 or limit > 100:
             raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
         
-        articles = news_service.search_articles(db, query, limit)
+        # Validate location parameters if provided
+        if lat is not None and not (-90 <= lat <= 90):
+            raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
+        
+        if lon is not None and not (-180 <= lon <= 180):
+            raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180")
+        
+        if radius < 0.1 or radius > 1000:
+            raise HTTPException(status_code=400, detail="Radius must be between 0.1 and 1000 km")
+        
+        # If location is provided, use location-aware search
+        if lat is not None and lon is not None:
+            articles = news_service.search_articles_with_location(db, query, lat, lon, radius, limit)
+        else:
+            articles = news_service.search_articles(db, query, limit)
         
         if not articles:
-            raise HTTPException(status_code=404, detail=f"No articles found for query: {query}")
+            location_msg = f" near ({lat}, {lon})" if lat is not None and lon is not None else ""
+            raise HTTPException(status_code=404, detail=f"No articles found for query: {query}{location_msg}")
         
         return articles
     except HTTPException:
@@ -174,10 +210,13 @@ async def search_news(
 @app.get("/api/v1/news/source", response_model=List[SourceResponse])
 async def get_news_by_source(
     source: str,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius: Optional[float] = 100.0,
     limit: int = 5,
     db: Session = Depends(get_db)
 ):
-    """Get news articles by source"""
+    """Get news articles by source with optional location filtering"""
     try:
         if not source or source.strip() == "":
             raise HTTPException(status_code=400, detail="Source parameter is required")
@@ -185,10 +224,25 @@ async def get_news_by_source(
         if limit < 1 or limit > 100:
             raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
         
-        articles = news_service.get_articles_by_source(db, source, limit)
+        # Validate location parameters if provided
+        if lat is not None and not (-90 <= lat <= 90):
+            raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
+        
+        if lon is not None and not (-180 <= lon <= 180):
+            raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180")
+        
+        if radius < 0.1 or radius > 1000:
+            raise HTTPException(status_code=400, detail="Radius must be between 0.1 and 1000 km")
+        
+        # If location is provided, use location-aware source search
+        if lat is not None and lon is not None:
+            articles = news_service.get_articles_by_source_with_location(db, source, lat, lon, radius, limit)
+        else:
+            articles = news_service.get_articles_by_source(db, source, limit)
         
         if not articles:
-            raise HTTPException(status_code=404, detail=f"No articles found for source: {source}")
+            location_msg = f" near ({lat}, {lon})" if lat is not None and lon is not None else ""
+            raise HTTPException(status_code=404, detail=f"No articles found for source: {source}{location_msg}")
         
         return articles
     except HTTPException:
@@ -263,6 +317,81 @@ async def get_trending_news(
         raise
     except Exception as e:
         logger.error(f"Trending error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/v1/news/flexible", response_model=List[SearchResponse])
+async def flexible_news_search(
+    query: Optional[str] = None,
+    category: Optional[str] = None,
+    source: Optional[str] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius: Optional[float] = 100.0,
+    min_score: Optional[float] = None,
+    max_score: Optional[float] = None,
+    limit: int = 5,
+    db: Session = Depends(get_db)
+):
+    """Flexible news search with multiple optional parameters (demonstrates query parameter flexibility)"""
+    try:
+        # At least one search criteria must be provided
+        if not any([query, category, source, lat, lon, min_score, max_score]):
+            raise HTTPException(
+                status_code=400, 
+                detail="At least one search criteria must be provided (query, category, source, location, or score range)"
+            )
+        
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+        
+        # Validate location parameters if provided
+        if lat is not None and not (-90 <= lat <= 90):
+            raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
+        
+        if lon is not None and not (-180 <= lon <= 180):
+            raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180")
+        
+        if radius < 0.1 or radius > 1000:
+            raise HTTPException(status_code=400, detail="Radius must be between 0.1 and 1000 km")
+        
+        # Validate score range if provided
+        if min_score is not None and not (0.0 <= min_score <= 1.0):
+            raise HTTPException(status_code=400, detail="Min score must be between 0.0 and 1.0")
+        
+        if max_score is not None and not (0.0 <= max_score <= 1.0):
+            raise HTTPException(status_code=400, detail="Max score must be between 0.0 and 1.0")
+        
+        if min_score is not None and max_score is not None and min_score > max_score:
+            raise HTTPException(status_code=400, detail="Min score cannot be greater than max score")
+        
+        # Use the flexible search service
+        articles = news_service.flexible_search(
+            db, query, category, source, lat, lon, radius, min_score, max_score, limit
+        )
+        
+        if not articles:
+            # Build descriptive error message
+            criteria = []
+            if query:
+                criteria.append(f"query: '{query}'")
+            if category:
+                criteria.append(f"category: '{category}'")
+            if source:
+                criteria.append(f"source: '{source}'")
+            if lat and lon:
+                criteria.append(f"location: ({lat}, {lon})")
+            if min_score is not None or max_score is not None:
+                score_range = f"score: {min_score or 0.0}-{max_score or 1.0}"
+                criteria.append(score_range)
+            
+            criteria_str = ", ".join(criteria)
+            raise HTTPException(status_code=404, detail=f"No articles found matching criteria: {criteria_str}")
+        
+        return articles
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Flexible search error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 if __name__ == "__main__":
