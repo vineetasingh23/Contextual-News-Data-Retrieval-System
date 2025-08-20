@@ -1,1 +1,5 @@
-news-data-retrieval-system-*.json
+*.json
+.env
+__pycache__/
+*.pyc
+*.log

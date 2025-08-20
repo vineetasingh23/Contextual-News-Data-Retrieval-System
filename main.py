@@ -1,30 +1,30 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
 
 from database import get_db, create_tables
-from models import Base
-from news_service import NewsService
+from models import NewsArticle, UserInteraction
 from schemas import (
-    NewsArticleResponse, NewsQueryRequest, NewsQueryResponse,
-    CategoryRequest, SourceRequest, SearchRequest, ScoreRequest,
-    NearbyRequest, TrendingRequest, TrendingResponse, ErrorResponse
+    NewsQuery, NewsResponse,
+    CategoryResponse, SearchResponse, SourceResponse,
+    NearbyResponse, TrendingResponse
 )
+from news_service import NewsService
+from llm_service import GoogleCloudLLMService
 
-# Configure logging
+# Basic logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
 app = FastAPI(
-    title="Contextual News Data Retrieval System",
-    description="A sophisticated backend system that fetches, organizes, and enriches news articles with LLM-generated insights",
+    title="News API",
+    description="Simple news retrieval API",
     version="1.0.0"
 )
 
-# Add CORS middleware
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,194 +33,139 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize services
+# Services
 news_service = NewsService()
+llm_service = GoogleCloudLLMService()
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and load news data on startup."""
+    """Initialize database and load data on startup"""
     try:
-        # Create database tables
         create_tables()
-        logger.info("Database tables created successfully")
+        logger.info("Database tables created")
         
-        # Load news data
+        # Load initial news data
+        news_service.load_news_data()
+        logger.info("News data loaded")
+        
+        # Ensure user interactions exist for trending
         db = next(get_db())
-        success = news_service.load_news_data(db)
-        if success:
-            logger.info("News data loaded successfully")
-        else:
-            logger.warning("Failed to load news data")
-        db.close()
+        try:
+            if db.query(UserInteraction).count() == 0:
+                news_service._simulate_user_interactions(db)
+        finally:
+            db.close()
         
     except Exception as e:
         logger.error(f"Startup error: {e}")
 
-@app.get("/", tags=["Root"])
-async def root():
-    """Root endpoint with system information."""
-    return {
-        "message": "Contextual News Data Retrieval System",
-        "version": "1.0.0",
-        "status": "running"
-    }
-
-@app.get("/health", tags=["Health"])
+@app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Simple health check endpoint"""
     return {"status": "healthy"}
 
-@app.post("/api/v1/news/query", response_model=NewsQueryResponse, tags=["News Query"])
-async def process_natural_language_query(
-    request: NewsQueryRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    Process natural language queries using LLM to extract entities and intent.
-    Returns relevant news articles based on the analysis.
-    """
+@app.post("/api/v1/news/query", response_model=NewsResponse)
+async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
+    """Main endpoint for natural language news queries"""
     try:
-        result = news_service.process_natural_language_query(
-            db, 
-            request.query, 
-            request.user_latitude, 
-            request.user_longitude
+        # Analyze the query using LLM
+        analysis = llm_service.analyze_query(query_data.query)
+        
+        # Get articles based on intent
+        articles = news_service.get_articles_by_intent(
+            db, analysis["intent"], analysis["entities"], 
+            query_data.user_latitude, query_data.user_longitude
         )
         
-        return NewsQueryResponse(
-            entities=result['entities'],
-            intent=result['intent'],
-            articles=[NewsArticleResponse.from_orm(article) for article in result['articles']],
-            total_results=result['total_results'],
-            query_used=result['query_used']
-        )
-        
-    except Exception as e:
-        logger.error(f"Error processing query: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.get("/api/v1/news/category", response_model=List[NewsArticleResponse], tags=["News Retrieval"])
-async def get_articles_by_category(
-    category: str = Query(..., description="News category"),
-    limit: int = Query(5, ge=1, le=50, description="Number of articles to return"),
-    db: Session = Depends(get_db)
-):
-    """Retrieve articles by category, ranked by publication date."""
-    try:
-        articles = news_service.get_articles_by_category(db, category, limit)
-        return [NewsArticleResponse.from_orm(article) for article in articles]
-        
-    except Exception as e:
-        logger.error(f"Error retrieving articles by category: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.get("/api/v1/news/source", response_model=List[NewsArticleResponse], tags=["News Retrieval"])
-async def get_articles_by_source(
-    source: str = Query(..., description="News source"),
-    limit: int = Query(5, ge=1, le=50, description="Number of articles to return"),
-    db: Session = Depends(get_db)
-):
-    """Retrieve articles by source, ranked by publication date."""
-    try:
-        articles = news_service.get_articles_by_source(db, source, limit)
-        return [NewsArticleResponse.from_orm(article) for article in articles]
-        
-    except Exception as e:
-        logger.error(f"Error retrieving articles by source: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.get("/api/v1/news/search", response_model=List[NewsArticleResponse], tags=["News Retrieval"])
-async def search_articles(
-    query: str = Query(..., description="Search query"),
-    limit: int = Query(5, ge=1, le=50, description="Number of articles to return"),
-    db: Session = Depends(get_db)
-):
-    """Search articles by query, ranked by relevance score and text matching."""
-    try:
-        articles = news_service.search_articles(db, query, limit)
-        return [NewsArticleResponse.from_orm(article) for article in articles]
-        
-    except Exception as e:
-        logger.error(f"Error searching articles: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.get("/api/v1/news/score", response_model=List[NewsArticleResponse], tags=["News Retrieval"])
-async def get_articles_by_score(
-    min_score: float = Query(0.0, ge=0.0, le=1.0, description="Minimum relevance score"),
-    limit: int = Query(5, ge=1, le=50, description="Number of articles to return"),
-    db: Session = Depends(get_db)
-):
-    """Retrieve articles by relevance score, ranked by score."""
-    try:
-        articles = news_service.get_articles_by_score(db, min_score, limit)
-        return [NewsArticleResponse.from_orm(article) for article in articles]
-        
-    except Exception as e:
-        logger.error(f"Error retrieving articles by score: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.get("/api/v1/news/nearby", response_model=List[NewsArticleResponse], tags=["News Retrieval"])
-async def get_nearby_articles(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
-    radius: float = Query(10.0, gt=0, description="Radius in kilometers"),
-    limit: int = Query(5, ge=1, le=50, description="Number of articles to return"),
-    db: Session = Depends(get_db)
-):
-    """Retrieve nearby articles using Haversine formula, ranked by distance."""
-    try:
-        articles = news_service.get_nearby_articles(db, lat, lon, radius, limit)
-        return [NewsArticleResponse.from_orm(article) for article in articles]
-        
-    except Exception as e:
-        logger.error(f"Error retrieving nearby articles: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.get("/api/v1/news/trending", response_model=TrendingResponse, tags=["Trending News"])
-async def get_trending_news(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
-    limit: int = Query(5, ge=1, le=50, description="Number of articles to return"),
-    db: Session = Depends(get_db)
-):
-    """Get trending news based on user interactions and location."""
-    try:
-        trending_data = news_service.get_trending_articles(db, lat, lon, limit)
-        
-        articles = [trending_item['article'] for trending_item in trending_data]
-        trending_scores = [trending_item['trending_score'] for trending_item in trending_data]
-        
-        # Get location cluster for the response
-        location_cluster = news_service._get_location_cluster(lat, lon)
-        
-        return TrendingResponse(
-            articles=[NewsArticleResponse.from_orm(article) for article in articles],
-            trending_scores=trending_scores,
-            location_cluster=location_cluster,
+        return NewsResponse(
+            articles=articles,
+            query=query_data.query,
+            intent=analysis["intent"],
+            entities=analysis["entities"],
             total_results=len(articles)
         )
         
     except Exception as e:
-        logger.error(f"Error retrieving trending news: {e}")
+        logger.error(f"Query error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    """Custom HTTP exception handler."""
-    return ErrorResponse(
-        error=exc.detail,
-        detail=f"Request failed with status code {exc.status_code}"
-    )
+@app.get("/api/v1/news/category", response_model=List[CategoryResponse])
+async def get_news_by_category(
+    category: str,
+    limit: int = 5,
+    db: Session = Depends(get_db)
+):
+    """Get news articles by category"""
+    try:
+        articles = news_service.get_articles_by_category(db, category, limit)
+        return articles
+    except Exception as e:
+        logger.error(f"Category error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """General exception handler."""
-    logger.error(f"Unhandled exception: {exc}")
-    return ErrorResponse(
-        error="Internal server error",
-        detail="An unexpected error occurred"
-    )
+@app.get("/api/v1/news/search", response_model=List[SearchResponse])
+async def search_news(
+    query: str,
+    limit: int = 5,
+    db: Session = Depends(get_db)
+):
+    """Search news articles by text query"""
+    try:
+        articles = news_service.search_articles(db, query, limit)
+        return articles
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/v1/news/source", response_model=List[SourceResponse])
+async def get_news_by_source(
+    source: str,
+    limit: int = 5,
+    db: Session = Depends(get_db)
+):
+    """Get news articles by source"""
+    try:
+        articles = news_service.get_articles_by_source(db, source, limit)
+        return articles
+    except Exception as e:
+        logger.error(f"Source error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/v1/news/nearby", response_model=List[NearbyResponse])
+async def get_nearby_news(
+    lat: float,
+    lon: float,
+    radius: float = 100.0,
+    limit: int = 5,
+    db: Session = Depends(get_db)
+):
+    """Get news articles near a specific location"""
+    try:
+        articles = news_service.get_nearby_articles(db, lat, lon, radius, limit)
+        return articles
+    except Exception as e:
+        logger.error(f"Nearby error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/v1/news/trending", response_model=TrendingResponse)
+async def get_trending_news(
+    lat: float,
+    lon: float,
+    limit: int = 5,
+    force_refresh: bool = False,
+    db: Session = Depends(get_db)
+):
+    """Get trending news articles for a location"""
+    try:
+        if force_refresh:
+            news_service.clear_trending_cache()
+        
+        result = news_service.get_trending_articles(db, lat, lon, limit)
+        return result
+    except Exception as e:
+        logger.error(f"Trending error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8009)

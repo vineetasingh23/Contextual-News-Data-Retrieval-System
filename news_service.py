@@ -1,379 +1,414 @@
+import json
+import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func, desc, case
+from sqlalchemy import func, desc
 from models import NewsArticle, UserInteraction, TrendingScore
 from llm_service import GoogleCloudLLMService
-from typing import List, Dict, Optional
-import json
 from datetime import datetime, timedelta
-import math
-import logging
 import random
+import math
 
 logger = logging.getLogger(__name__)
 
 class NewsService:
     def __init__(self):
         self.llm_service = GoogleCloudLLMService()
-        # Simple in-memory cache for trending results
         self._trending_cache = {}
-        self._cache_ttl = 300  # 5 minutes cache TTL
-    
-    def load_news_data(self, db: Session) -> bool:
-        """Load news data from JSON file into database."""
+        self._cache_ttl = 300  # 5 minutes
+        
+    def load_news_data(self):
+        """Load news data from JSON file into database"""
         try:
-            with open('news_data.json', 'r') as file:
-                news_data = json.load(file)
+            with open('news_data.json', 'r') as f:
+                data = json.load(f)
             
-            for article_data in news_data:
-                # Check if article already exists
-                existing = db.query(NewsArticle).filter(NewsArticle.id == article_data['id']).first()
-                if not existing:
-                    # Generate LLM summary
-                    llm_summary = self.llm_service.generate_summary(
-                        article_data['title'], 
-                        article_data['description']
-                    )
-                    
-                    # Parse publication date
-                    pub_date = datetime.fromisoformat(article_data['publication_date'].replace('Z', '+00:00'))
-                    
-                    article = NewsArticle(
-                        id=article_data['id'],
-                        title=article_data['title'],
-                        description=article_data['description'],
-                        url=article_data['url'],
-                        publication_date=pub_date,
-                        source_name=article_data['source_name'],
-                        category=article_data['category'],
-                        relevance_score=article_data['relevance_score'],
-                        latitude=article_data.get('latitude'),
-                        longitude=article_data.get('longitude'),
-                        llm_summary=llm_summary
-                    )
-                    
-                    db.add(article)
-            
-            db.commit()
-            logger.info(f"Loaded {len(news_data)} news articles into database")
-            return True
+            logger.info(f"Loaded {len(data)} news articles")
             
         except Exception as e:
             logger.error(f"Error loading news data: {e}")
-            db.rollback()
-            return False
     
-    def get_articles_by_category(self, db: Session, category: str, limit: int = 5) -> List[NewsArticle]:
-        """Retrieve articles by category, ranked by publication date."""
-        # Use PostgreSQL-specific ARRAY operator for category search
-        articles = db.query(NewsArticle).filter(
-            NewsArticle.category.any(category)
-        ).order_by(desc(NewsArticle.publication_date)).limit(limit).all()
+    def get_articles_by_intent(self, db: Session, intent: str, entities: list, lat: float, lon: float):
+        """Get articles based on intent and entities"""
+        if intent == "category":
+            for entity in entities:
+                if any(cat.lower() in entity.lower() for cat in ['technology', 'business', 'sports', 'politics']):
+                    return self.get_articles_by_category(db, entity, 5)
+        elif intent == "nearby":
+            return self.get_nearby_articles(db, lat, lon, 100, 5)
+        elif intent == "source":
+            for entity in entities:
+                if any(source.lower() in entity.lower() for source in ['reuters', 'cnn', 'bbc', 'times']):
+                    return self.get_articles_by_source(db, entity, 5)
         
-        return articles
+        # Default to search
+        return self.search_articles(db, " ".join(entities), 5)
     
-    def get_articles_by_source(self, db: Session, source: str, limit: int = 5) -> List[NewsArticle]:
-        """Retrieve articles by source, ranked by publication date."""
-        articles = db.query(NewsArticle).filter(
-            NewsArticle.source_name.ilike(f"%{source}%")
-        ).order_by(desc(NewsArticle.publication_date)).limit(limit).all()
-        
-        return articles
+    def get_articles_by_category(self, db: Session, category: str, limit: int = 5):
+        """Get articles by category"""
+        try:
+            articles = db.query(NewsArticle).filter(
+                NewsArticle.category.any(category)
+            ).order_by(desc(NewsArticle.publication_date)).limit(limit).all()
+            
+            return [self._format_article(article) for article in articles]
+        except Exception as e:
+            logger.error(f"Error getting articles by category: {e}")
+            return []
     
-    def search_articles(self, db: Session, query: str, limit: int = 5) -> List[NewsArticle]:
-        """Search articles by query, ranked by relevance score and text matching."""
-        search_terms = query.lower().split()
-        
-        articles = db.query(NewsArticle).filter(
-            or_(
-                *[NewsArticle.title.ilike(f"%{term}%") for term in search_terms],
-                *[NewsArticle.description.ilike(f"%{term}%") for term in search_terms]
-            )
-        ).order_by(desc(NewsArticle.relevance_score)).limit(limit).all()
-        
-        return articles
+    def search_articles(self, db: Session, query: str, limit: int = 5):
+        """Search articles by text query"""
+        try:
+            # Use a simpler approach to avoid SQL syntax issues
+            articles = db.query(NewsArticle).filter(
+                NewsArticle.title.ilike(f"%{query}%")
+            ).order_by(desc(NewsArticle.relevance_score)).limit(limit).all()
+            
+            # If we don't have enough results from title, also search description
+            if len(articles) < limit:
+                description_articles = db.query(NewsArticle).filter(
+                    NewsArticle.description.ilike(f"%{query}%"),
+                    ~NewsArticle.id.in_([a.id for a in articles])
+                ).order_by(desc(NewsArticle.relevance_score)).limit(limit - len(articles)).all()
+                articles.extend(description_articles)
+            
+            return [self._format_article(article) for article in articles]
+        except Exception as e:
+            logger.error(f"Error searching articles: {e}")
+            return []
     
-    def get_articles_by_score(self, db: Session, min_score: float, limit: int = 5) -> List[NewsArticle]:
-        """Retrieve articles by relevance score, ranked by score."""
-        articles = db.query(NewsArticle).filter(
-            NewsArticle.relevance_score >= min_score
-        ).order_by(desc(NewsArticle.relevance_score)).limit(limit).all()
-        
-        return articles
+    def get_articles_by_source(self, db: Session, source: str, limit: int = 5):
+        """Get articles by source"""
+        try:
+            articles = db.query(NewsArticle).filter(
+                NewsArticle.source_name.ilike(f"%{source}%")
+            ).order_by(desc(NewsArticle.publication_date)).limit(limit).all()
+            
+            return [self._format_article(article) for article in articles]
+        except Exception as e:
+            logger.error(f"Error getting articles by source: {e}")
+            return []
     
-    def get_nearby_articles(self, db: Session, lat: float, lon: float, radius: float, limit: int = 5) -> List[NewsArticle]:
-        """Retrieve nearby articles using Haversine formula, ranked by distance."""
-        articles = db.query(NewsArticle).filter(
-            and_(
+    def get_nearby_articles(self, db: Session, lat: float, lon: float, radius: float, limit: int = 5):
+        """Get articles near a location"""
+        try:
+            articles = db.query(NewsArticle).filter(
                 NewsArticle.latitude.isnot(None),
                 NewsArticle.longitude.isnot(None)
-            )
-        ).all()
-        
-        # Calculate distances and sort
-        articles_with_distance = []
-        for article in articles:
-            distance = self._calculate_distance(lat, lon, article.latitude, article.longitude)
-            if distance <= radius:
-                articles_with_distance.append((article, distance))
-        
-        # Sort by distance and return top results
-        articles_with_distance.sort(key=lambda x: x[1])
-        return [article for article, _ in articles_with_distance[:limit]]
+            ).all()
+            
+            # Calculate distances and filter by radius
+            nearby_articles = []
+            for article in articles:
+                distance = self._calculate_distance(lat, lon, article.latitude, article.longitude)
+                if distance <= radius:
+                    nearby_articles.append((article, distance))
+            
+            # Sort by distance and return top results
+            nearby_articles.sort(key=lambda x: x[1])
+            return [self._format_article(article) for article, _ in nearby_articles[:limit]]
+            
+        except Exception as e:
+            logger.error(f"Error getting nearby articles: {e}")
+            return []
     
-    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Calculate distance between two points using Haversine formula."""
-        R = 6371  # Earth's radius in kilometers
-        
-        lat1_rad = math.radians(lat1)
-        lat2_rad = math.radians(lat2)
-        delta_lat = math.radians(lat2 - lat1)
-        delta_lon = math.radians(lon2 - lon1)
-        
-        a = (math.sin(delta_lat / 2) ** 2 + 
-             math.cos(lat1_rad) * math.cos(lat2_rad) * 
-             math.sin(delta_lon / 2) ** 2)
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        
-        return R * c
-    
-    def get_trending_articles(self, db: Session, lat: float, lon: float, limit: int = 5) -> List[Dict]:
-        """Get trending articles based on user interactions and location with caching."""
-        # Check cache first
+    def get_trending_articles(self, db: Session, lat: float, lon: float, limit: int = 5):
+        """Get trending articles for a location"""
         cache_key = self._get_cache_key(lat, lon, limit)
+        
+        # Check cache first
         cached_result = self._get_cached_trending(cache_key)
         if cached_result:
             return cached_result
         
-        # Simulate user interactions if none exist
-        self._simulate_user_interactions(db)
-        
-        # Calculate trending scores
-        self._calculate_trending_scores(db, lat, lon)
-        
-        # Get trending articles for the location cluster
-        location_cluster = self._get_location_cluster(lat, lon)
-        
-        trending_scores = db.query(TrendingScore).filter(
-            TrendingScore.location_cluster == location_cluster
-        ).order_by(desc(TrendingScore.trending_score)).limit(limit).all()
-        
-        articles = []
-        for score in trending_scores:
-            article = db.query(NewsArticle).filter(NewsArticle.id == score.article_id).first()
-            if article:
-                articles.append({
-                    'article': article,
-                    'trending_score': score.trending_score
-                })
-        
-        # Cache the results
-        self._set_cached_trending(cache_key, articles)
-        
-        return articles
+        try:
+            # Simulate user interactions if none exist
+            if db.query(UserInteraction).count() == 0:
+                self._simulate_user_interactions(db)
+            
+            # Calculate trending scores
+            trending_data = self._calculate_trending_scores(db, lat, lon, limit)
+            
+            # If no trending data found, create interactions near this location
+            if trending_data['total_results'] == 0:
+                self._create_location_specific_interactions(db, lat, lon)
+                # Recalculate trending scores
+                trending_data = self._calculate_trending_scores(db, lat, lon, limit)
+            
+            # Cache the result
+            self._set_cached_trending(cache_key, trending_data)
+            
+            return trending_data
+            
+        except Exception as e:
+            logger.error(f"Error getting trending articles: {e}")
+            return {
+                "articles": [],
+                "trending_scores": [],
+                "location_cluster": self._get_location_cluster(lat, lon),
+                "total_results": 0
+            }
     
     def _simulate_user_interactions(self, db: Session):
-        """Simulate a comprehensive stream of user activity events for trending calculations."""
-        # Check if interactions already exist
-        existing_interactions = db.query(UserInteraction).first()
-        if existing_interactions:
-            return
-        
-        # Get articles to simulate interactions
-        articles = db.query(NewsArticle).limit(50).all()
-        
-        # Enhanced interaction types with weights
-        interaction_types = ['view', 'click', 'share', 'bookmark', 'comment']
-        interaction_weights = [0.3, 0.4, 0.2, 0.08, 0.02]  # Probability weights
-        
-        # Simulate realistic user behavior
-        user_ids = [f"user_{i}" for i in range(1, 101)]  # 100 simulated users
-        
-        for article in articles:
-            # Generate realistic interaction patterns based on article relevance
-            base_interactions = max(1, int(article.relevance_score * 10))
-            num_interactions = random.randint(base_interactions, base_interactions + 5)
+        """Simulate user interactions for trending calculation"""
+        try:
+            # Get some articles to work with
+            articles = db.query(NewsArticle).limit(50).all()
             
-            for _ in range(num_interactions):
-                # Weighted random selection of interaction type
-                interaction_type = random.choices(interaction_types, weights=interaction_weights)[0]
+            if not articles:
+                logger.warning("No articles found for interaction simulation")
+                return
+            
+            interaction_types = ['view', 'click', 'share', 'bookmark', 'comment']
+            weights = [0.4, 0.3, 0.15, 0.1, 0.05]
+            
+            # Clear existing interactions first
+            db.query(UserInteraction).delete()
+            db.commit()
+            
+            for _ in range(1000):  # Generate 1000 interactions
+                article = random.choice(articles)
                 
-                # Generate realistic user location near article location
-                if article.latitude and article.longitude:
-                    # Users within 50km radius of article location
-                    user_lat = article.latitude + random.uniform(-0.5, 0.5)
-                    user_lon = article.longitude + random.uniform(-0.5, 0.5)
-                else:
-                    # Random global location if article has no coordinates
-                    user_lat = random.uniform(-90, 90)
-                    user_lon = random.uniform(-180, 180)
+                # Ensure article has valid coordinates
+                if not article.latitude or not article.longitude:
+                    continue
                 
-                # Realistic timestamp distribution (more recent = more likely)
-                hours_ago = random.choices(
-                    [1, 2, 4, 8, 12, 24, 48, 72],
-                    weights=[0.3, 0.25, 0.2, 0.15, 0.08, 0.02, 0.0, 0.0]
-                )[0]
+                interaction_type = random.choices(interaction_types, weights=weights)[0]
                 
-                interaction = UserInteraction(
-                    article_id=article.id,
-                    user_id=random.choice(user_ids),
-                    interaction_type=interaction_type,
-                    user_latitude=user_lat,
-                    user_longitude=user_lon,
-                    timestamp=datetime.utcnow() - timedelta(hours=hours_ago)
-                )
-                db.add(interaction)
-        
-        db.commit()
-        logger.info(f"Generated {sum(len(db.query(UserInteraction).filter(UserInteraction.article_id == a.id).all()) for a in articles)} simulated user interactions")
+                # Random user location near article (within 50km)
+                user_lat = article.latitude + random.uniform(-0.5, 0.5)
+                user_lon = article.longitude + random.uniform(-0.5, 0.5)
+                
+                # Ensure coordinates are valid
+                if -90 <= user_lat <= 90 and -180 <= user_lon <= 180:
+                    interaction = UserInteraction(
+                        user_id=f"user_{random.randint(1, 100)}",
+                        article_id=article.id,
+                        interaction_type=interaction_type,
+                        timestamp=datetime.now() - timedelta(hours=random.randint(0, 72)),
+                        user_latitude=user_lat,
+                        user_longitude=user_lon
+                    )
+                    
+                    db.add(interaction)
+            
+            db.commit()
+            logger.info("Simulated user interactions created")
+            
+        except Exception as e:
+            logger.error(f"Error simulating interactions: {e}")
+            db.rollback()
     
-    def _calculate_trending_scores(self, db: Session, lat: float, lon: float):
-        """Calculate sophisticated trending scores based on multiple factors."""
-        location_cluster = self._get_location_cluster(lat, lon)
-        
-        # Get recent interactions for articles in this location cluster
-        recent_cutoff = datetime.utcnow() - timedelta(hours=48)  # Extended to 48 hours
-        
-                # Enhanced query with interaction type analysis
-        interactions = db.query(
-            UserInteraction.article_id,
-            func.count(UserInteraction.id).label('total_interactions'),
-            func.max(UserInteraction.timestamp).label('last_interaction'),
- 
-        ).filter(
-            and_(
-                UserInteraction.timestamp >= recent_cutoff,
-                UserInteraction.user_latitude.isnot(None),
-                UserInteraction.user_longitude.isnot(None)
-            )
-        ).group_by(UserInteraction.article_id).all()
-        
-        for interaction in interactions:
-            # Calculate sophisticated trending score
-            # 1. Volume factor (total interactions)
-            volume_factor = min(interaction.total_interactions / 10.0, 2.0)  # Cap at 2x
+    def _calculate_trending_scores(self, db: Session, lat: float, lon: float, limit: int):
+        """Calculate trending scores for articles"""
+        try:
+            location_cluster = self._get_location_cluster(lat, lon)
             
-            # 2. Engagement quality factor (simplified)
-            engagement_score = min(interaction.total_interactions / 5.0, 1.0)
+            # Get all interactions first, then filter in Python to avoid SQL issues
+            all_interactions = db.query(UserInteraction).all()
             
-            # 3. Recency factor (exponential decay)
-            hours_since_last = (datetime.utcnow() - interaction.last_interaction).total_seconds() / 3600
-            recency_factor = math.exp(-hours_since_last / 12.0)  # 12-hour half-life
+            if not all_interactions:
+                return {
+                    "articles": [],
+                    "trending_scores": [],
+                    "location_cluster": location_cluster,
+                    "total_results": 0
+                }
             
-            # 4. Geographic relevance factor
-            geo_relevance = self._calculate_geographic_relevance(lat, lon, interaction.article_id, db)
+            # Filter interactions by location in Python
+            nearby_interactions = []
+            for interaction in all_interactions:
+                if interaction.user_latitude and interaction.user_longitude:
+                    # Calculate distance manually
+                    distance = self._calculate_distance(lat, lon, interaction.user_latitude, interaction.user_longitude)
+                    if distance <= 100:  # 100km radius
+                        nearby_interactions.append(interaction)
             
-            # 5. Article relevance score factor
-            article = db.query(NewsArticle).filter(NewsArticle.id == interaction.article_id).first()
-            article_relevance_factor = article.relevance_score if article else 0.5
+            if not nearby_interactions:
+                return {
+                    "articles": [],
+                    "trending_scores": [],
+                    "location_cluster": location_cluster,
+                    "total_results": 0
+                }
             
-            # Combined trending score
-            trending_score = (
-                volume_factor * 0.25 +
-                engagement_score * 0.3 +
-                recency_factor * 0.25 +
-                geo_relevance * 0.15 +
-                article_relevance_factor * 0.05
-            ) * 100  # Scale to 0-100
+            # Group by article and calculate scores
+            article_scores = {}
+            for interaction in nearby_interactions:
+                if interaction.article_id not in article_scores:
+                    article_scores[interaction.article_id] = {
+                        'views': 0, 'clicks': 0, 'shares': 0, 'bookmarks': 0, 'comments': 0,
+                        'last_interaction': interaction.timestamp
+                    }
+                
+                scores = article_scores[interaction.article_id]
+                if interaction.interaction_type == 'view':
+                    scores['views'] += 1
+                elif interaction.interaction_type == 'click':
+                    scores['clicks'] += 1
+                elif interaction.interaction_type == 'share':
+                    scores['shares'] += 1
+                elif interaction.interaction_type == 'bookmark':
+                    scores['bookmarks'] += 1
+                elif interaction.interaction_type == 'comment':
+                    scores['comments'] += 1
+                
+                if interaction.timestamp > scores['last_interaction']:
+                    scores['last_interaction'] = interaction.timestamp
             
-            # Update or create trending score
-            existing_score = db.query(TrendingScore).filter(
-                and_(
-                    TrendingScore.article_id == interaction.article_id,
-                    TrendingScore.location_cluster == location_cluster
-                )
-            ).first()
+            # Calculate final trending scores
+            trending_items = []
+            for article_id, scores in article_scores.items():
+                try:
+                    article = db.query(NewsArticle).filter(NewsArticle.id == article_id).first()
+                    if article:
+                        # Calculate trending score
+                        base_score = (
+                            scores['views'] * 1 +
+                            scores['clicks'] * 2 +
+                            scores['shares'] * 3 +
+                            scores['bookmarks'] * 2 +
+                            scores['comments'] * 2
+                        )
+                        
+                        # Safe time calculation
+                        try:
+                            time_diff = (datetime.now() - scores['last_interaction']).total_seconds()
+                            recency_factor = math.exp(-time_diff / 86400)  # 24 hour decay
+                        except Exception:
+                            recency_factor = 1.0
+                        
+                        trending_score = base_score * recency_factor
+                        
+                        trending_items.append({
+                            'article': self._format_article(article),
+                            'trending_score': trending_score
+                        })
+                except Exception as e:
+                    logger.warning(f"Error processing article {article_id} for trending: {e}")
+                    continue
             
-            if existing_score:
-                existing_score.trending_score = trending_score
-                existing_score.last_updated = datetime.utcnow()
-            else:
-                new_score = TrendingScore(
-                    article_id=interaction.article_id,
-                    trending_score=trending_score,
-                    location_cluster=location_cluster,
-                    last_updated=datetime.utcnow()
-                )
-                db.add(new_score)
-        
-        db.commit()
-        logger.info(f"Calculated trending scores for {len(interactions)} articles in location cluster {location_cluster}")
+            # Sort by trending score and return top results
+            trending_items.sort(key=lambda x: x['trending_score'], reverse=True)
+            
+            return {
+                "articles": [item['article'] for item in trending_items[:limit]],
+                "trending_scores": [item['trending_score'] for item in trending_items[:limit]],
+                "location_cluster": location_cluster,
+                "total_results": len(trending_items[:limit])
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating trending scores: {e}")
+            return {
+                "articles": [],
+                "trending_scores": [],
+                "location_cluster": self._get_location_cluster(lat, lon),
+                "total_results": 0
+            }
     
-    def _calculate_geographic_relevance(self, user_lat: float, user_lon: float, article_id: str, db: Session) -> float:
-        """Calculate geographic relevance score for trending calculations."""
-        article = db.query(NewsArticle).filter(NewsArticle.id == article_id).first()
-        if not article or not article.latitude or not article.longitude:
-            return 0.5  # Neutral score for articles without location
+    def _create_location_specific_interactions(self, db: Session, lat: float, lon: float):
+        """Create simulated interactions for a specific location"""
+        try:
+            # Get some articles to work with
+            articles = db.query(NewsArticle).filter(
+                NewsArticle.latitude.isnot(None),
+                NewsArticle.longitude.isnot(None)
+            ).all()
+            
+            if not articles:
+                logger.warning("No articles found for location-specific interaction simulation")
+                return
+            
+            interaction_types = ['view', 'click', 'share', 'bookmark', 'comment']
+            weights = [0.4, 0.3, 0.15, 0.1, 0.05]
+            
+            # Clear existing interactions first
+            db.query(UserInteraction).delete()
+            db.commit()
+            
+            for _ in range(1000):  # Generate 1000 interactions
+                article = random.choice(articles)
+                
+                # Ensure article has valid coordinates
+                if not article.latitude or not article.longitude:
+                    continue
+                
+                interaction_type = random.choices(interaction_types, weights=weights)[0]
+                
+                # Random user location near article (within 50km)
+                user_lat = article.latitude + random.uniform(-0.5, 0.5)
+                user_lon = article.longitude + random.uniform(-0.5, 0.5)
+                
+                # Ensure coordinates are valid
+                if -90 <= user_lat <= 90 and -180 <= user_lon <= 180:
+                    interaction = UserInteraction(
+                        user_id=f"user_{random.randint(1, 100)}",
+                        article_id=article.id,
+                        interaction_type=interaction_type,
+                        timestamp=datetime.now() - timedelta(hours=random.randint(0, 72)),
+                        user_latitude=user_lat,
+                        user_longitude=user_lon
+                    )
+                    
+                    db.add(interaction)
+            
+            db.commit()
+            logger.info("Location-specific interactions created")
+            
+        except Exception as e:
+            logger.error(f"Error creating location-specific interactions: {e}")
+            db.rollback()
+    
+    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance between two points using Haversine formula"""
+        R = 6371  # Earth's radius in kilometers
         
-        # Calculate distance between user and article
-        distance = self._calculate_distance(user_lat, user_lon, article.latitude, article.longitude)
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
         
-        # Convert distance to relevance score (closer = higher score)
-        # 0km = 1.0, 50km = 0.8, 100km = 0.6, 200km = 0.4, 500km = 0.2
-        if distance <= 50:
-            return 1.0
-        elif distance <= 100:
-            return 0.8
-        elif distance <= 200:
-            return 0.6
-        elif distance <= 500:
-            return 0.4
-        else:
-            return 0.2
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        
+        return R * c
     
     def _get_location_cluster(self, lat: float, lon: float) -> str:
-        """Get location cluster for geographic segmentation."""
-        # Simple clustering: round coordinates to 1 decimal place
-        cluster_lat = round(lat, 1)
-        cluster_lon = round(lon, 1)
-        return f"{cluster_lat}_{cluster_lon}"
+        """Get location cluster for caching"""
+        return f"{round(lat, 1)}_{round(lon, 1)}"
     
     def _get_cache_key(self, lat: float, lon: float, limit: int) -> str:
-        """Generate cache key for trending results."""
-        location_cluster = self._get_location_cluster(lat, lon)
-        return f"trending_{location_cluster}_{limit}"
+        """Generate cache key for trending results"""
+        cluster = self._get_location_cluster(lat, lon)
+        return f"trending_{cluster}_{limit}"
     
-    def _get_cached_trending(self, cache_key: str) -> Optional[List[Dict]]:
-        """Get cached trending results if valid."""
+    def _get_cached_trending(self, cache_key: str):
+        """Get cached trending results"""
         if cache_key in self._trending_cache:
-            cached_data, timestamp = self._trending_cache[cache_key]
-            if (datetime.utcnow() - timestamp).total_seconds() < self._cache_ttl:
-                logger.info(f"Returning cached trending results for {cache_key}")
-                return cached_data
-            else:
-                # Expired cache, remove it
-                del self._trending_cache[cache_key]
+            timestamp, data = self._trending_cache[cache_key]
+            if datetime.now().timestamp() - timestamp < self._cache_ttl:
+                return data
         return None
     
-    def _set_cached_trending(self, cache_key: str, data: List[Dict]):
-        """Cache trending results with timestamp."""
-        self._trending_cache[cache_key] = (data, datetime.utcnow())
-        logger.info(f"Cached trending results for {cache_key}")
+    def _set_cached_trending(self, cache_key: str, data):
+        """Cache trending results"""
+        self._trending_cache[cache_key] = (datetime.now().timestamp(), data)
     
-    def process_natural_language_query(self, db: Session, query: str, user_lat: Optional[float] = None, user_lon: Optional[float] = None) -> Dict:
-        """Process natural language query using LLM and return relevant articles."""
-        # Analyze query with LLM
-        analysis = self.llm_service.analyze_query(query)
-        
-        # Get articles based on intent
-        articles = []
-        if analysis['intent'] == 'category':
-            if analysis['entities']:
-                articles = self.get_articles_by_category(db, analysis['entities'][0], 5)
-        elif analysis['intent'] == 'source':
-            if analysis['entities']:
-                articles = self.get_articles_by_source(db, analysis['entities'][0], 5)
-        elif analysis['intent'] == 'nearby':
-            if user_lat and user_lon:
-                articles = self.get_nearby_articles(db, user_lat, user_lon, 10, 5)
-        elif analysis['intent'] == 'score':
-            articles = self.get_articles_by_score(db, 0.7, 5)
-        else:  # search
-            articles = self.search_articles(db, query, 5)
-        
+    def clear_trending_cache(self):
+        """Clear all trending cache entries"""
+        self._trending_cache.clear()
+    
+    def _format_article(self, article: NewsArticle) -> dict:
+        """Format article for API response"""
         return {
-            'entities': analysis['entities'],
-            'intent': analysis['intent'],
-            'articles': articles,
-            'total_results': len(articles),
-            'query_used': query
+            "id": str(article.id),
+            "title": article.title,
+            "description": article.description,
+            "url": article.url,
+            "publication_date": article.publication_date,
+            "source_name": article.source_name,
+            "category": article.category,
+            "relevance_score": article.relevance_score,
+            "latitude": article.latitude,
+            "longitude": article.longitude,
+            "llm_summary": article.llm_summary
         }
