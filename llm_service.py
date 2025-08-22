@@ -15,22 +15,23 @@ class GoogleCloudLLMService:
         """Analyze a natural language query to extract entities and determine intent."""
         try:
             entities = self._extract_entities(query)
-            intent = self._determine_intent(query, entities)
             concepts = self._extract_concepts(query)
+            intent = self._determine_intent(query, entities)
             
             return {
                 "entities": entities,
-                "concepts": concepts,
                 "intent": intent,
+                "concepts": concepts,
                 "confidence": 0.85
             }
             
         except Exception as e:
-            logger.error(f"Error analyzing query: {e}")
+            logger.error(f"Error analyzing query with Google Cloud: {e}")
+            # Return minimal fallback for critical errors
             return {
                 "entities": [],
-                "concepts": [],
                 "intent": "search",
+                "concepts": [],
                 "confidence": 0.0
             }
     
@@ -46,8 +47,16 @@ class GoogleCloudLLMService:
             
             entities = []
             for entity in response.entities:
-                if entity.salience > 0.1:
-                    entities.append(entity.name)
+                try:
+                    # Handle different versions of the API
+                    salience = getattr(entity, 'salience', 0.0)
+                    name = getattr(entity, 'name', None)
+                    
+                    if name and salience > 0.1:
+                        entities.append(name)
+                except Exception as e:
+                    logger.debug(f"Error processing entity: {e}")
+                    continue
                     
             return entities
             
@@ -67,13 +76,27 @@ class GoogleCloudLLMService:
             
             concepts = []
             for token in response.tokens:
-                if token.part_of_speech.tag in [
-                    language_v1.PartOfSpeech.Tag.NOUN,
-                    language_v1.PartOfSpeech.Tag.PROPER_NOUN,
-                    language_v1.PartOfSpeech.Tag.ADJ
-                ]:
-                    if token.text.content.lower() not in ['the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'for']:
-                        concepts.append(token.text.content)
+                try:
+                    # Handle different versions of the API
+                    pos_tag = getattr(token.part_of_speech, 'tag', None)
+                    if pos_tag is None:
+                        pos_tag = getattr(token.part_of_speech, 'Tag', None)
+                    
+                    if pos_tag in [
+                        language_v1.PartOfSpeech.Tag.NOUN,
+                        language_v1.PartOfSpeech.Tag.PROPER_NOUN,
+                        language_v1.PartOfSpeech.Tag.ADJ
+                    ]:
+                        # Handle different versions of the text attribute
+                        text_content = getattr(token.text, 'content', None)
+                        if text_content is None:
+                            text_content = str(token.text)
+                        
+                        if text_content.lower() not in ['the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'for']:
+                            concepts.append(text_content)
+                except Exception as e:
+                    logger.debug(f"Error processing token: {e}")
+                    continue
             
             return list(set(concepts))[:10]
             
@@ -126,6 +149,7 @@ class GoogleCloudLLMService:
                 
         except Exception as e:
             logger.error(f"Error generating summary: {e}")
+            # Simple fallback for critical errors
             if description:
                 first_sentence = description.split('.')[0]
                 if len(first_sentence) > 20:
@@ -134,3 +158,5 @@ class GoogleCloudLLMService:
                     return f"{title}. {description[:150]}..."
             else:
                 return title
+    
+

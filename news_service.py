@@ -31,8 +31,28 @@ class NewsService:
         """Get articles based on intent and entities"""
         if intent == "category":
             for entity in entities:
-                if any(cat.lower() in entity.lower() for cat in ['technology', 'business', 'sports', 'politics']):
-                    return self.get_articles_by_category(db, entity, 5)
+                # Check if entity contains any of the known categories
+                entity_lower = entity.lower()
+                
+                # Handle compound entities like "technology news", "business updates", etc.
+                for cat in ['technology', 'business', 'sports', 'politics', 'entertainment', 'science', 'national', 'world']:
+                    if cat in entity_lower:
+                        return self.get_articles_by_category(db, cat, 5)
+                
+                # Also check if entity is exactly a category
+                if entity_lower in ['technology', 'business', 'sports', 'politics', 'entertainment', 'science', 'national', 'world']:
+                    return self.get_articles_by_category(db, entity_lower, 5)
+                
+                # Handle special cases for compound entities
+                if 'technology' in entity_lower or 'tech' in entity_lower:
+                    return self.get_articles_by_category(db, 'technology', 5)
+                elif 'business' in entity_lower or 'economy' in entity_lower:
+                    return self.get_articles_by_category(db, 'business', 5)
+                elif 'sports' in entity_lower:
+                    return self.get_articles_by_category(db, 'sports', 5)
+                elif 'politics' in entity_lower or 'political' in entity_lower:
+                    return self.get_articles_by_category(db, 'politics', 5)
+                    
         elif intent == "nearby":
             return self.get_nearby_articles(db, lat, lon, 100, 5)
         elif intent == "source":

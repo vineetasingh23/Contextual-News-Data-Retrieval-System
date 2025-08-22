@@ -1,9 +1,9 @@
 from sqlalchemy import Column, String, Float, DateTime, Text, ARRAY
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.ext.declarative import declarative_base
 import uuid
 
-Base = declarative_base()
+# Import Base from database to avoid circular imports
+from database import Base
 
 class NewsArticle(Base):
     __tablename__ = "news_articles"

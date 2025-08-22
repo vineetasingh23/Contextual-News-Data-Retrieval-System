@@ -21,4 +21,6 @@ def get_db():
         db.close()
 
 def create_tables():
+    # Import models to ensure they are registered with Base
+    from models import NewsArticle, UserInteraction, TrendingScore
     Base.metadata.create_all(bind=engine)
