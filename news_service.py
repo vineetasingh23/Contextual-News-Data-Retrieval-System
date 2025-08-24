@@ -12,7 +12,11 @@ logger = logging.getLogger(__name__)
 
 class NewsService:
     def __init__(self):
-        self.llm_service = GoogleCloudLLMService()
+        try:
+            self.llm_service = GoogleCloudLLMService()
+        except Exception as e:
+            logger.warning(f"LLM service not available: {e}")
+            self.llm_service = None
         self._trending_cache = {}
         self._cache_ttl = 300  # 5 minutes
         
@@ -22,10 +26,39 @@ class NewsService:
             with open('news_data.json', 'r') as f:
                 data = json.load(f)
             
-            logger.info(f"Loaded {len(data)} news articles")
+            logger.info(f"Loaded {len(data)} news articles from JSON")
+            
+            # Get database session
+            from database import get_db
+            db = next(get_db())
+            
+            try:
+                # Check if we already have articles
+                existing_count = db.query(NewsArticle).count()
+                if existing_count > 0:
+                    logger.info(f"Database already has {existing_count} articles, skipping load")
+                    return
+                
+                # Insert articles
+                for article_data in data:
+                    # Convert string date to datetime
+                    from datetime import datetime
+                    if isinstance(article_data['publication_date'], str):
+                        article_data['publication_date'] = datetime.fromisoformat(article_data['publication_date'].replace('Z', '+00:00'))
+                    
+                    article = NewsArticle(**article_data)
+                    db.add(article)
+                
+                db.commit()
+                logger.info(f"Successfully loaded {len(data)} articles into database")
+                
+            finally:
+                db.close()
             
         except Exception as e:
             logger.error(f"Error loading news data: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
     
     def get_articles_by_intent(self, db: Session, intent: str, entities: list, lat: float, lon: float):
         """Get articles based on intent and entities"""

@@ -6,7 +6,8 @@ import os
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost/news_db")
+# Force the correct database URL
+DATABASE_URL = "postgresql://vineeta:vineeta123@localhost:5432/newsdb"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

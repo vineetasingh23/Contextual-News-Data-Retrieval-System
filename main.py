@@ -53,31 +53,43 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # Services
-news_service = NewsService()
-llm_service = GoogleCloudLLMService()
+news_service = None
+llm_service = None
 startup_time = time.time()
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and load data on startup"""
+    global news_service, llm_service
+    
     try:
         create_tables()
         logger.info("Database tables created")
         
-        # Load initial news data
-        news_service.load_news_data()
-        logger.info("News data loaded")
-        
-        # Ensure user interactions exist for trending
-        db = next(get_db())
+        # Initialize services
         try:
-            if db.query(UserInteraction).count() == 0:
-                news_service._simulate_user_interactions(db)
-        finally:
-            db.close()
+            llm_service = GoogleCloudLLMService()
+            logger.info("LLM service initialized")
+        except Exception as e:
+            logger.warning(f"LLM service not available: {e}")
+            llm_service = None
+        
+        try:
+            news_service = NewsService()
+            logger.info("News service initialized")
+        except Exception as e:
+            logger.warning(f"News service not available: {e}")
+            news_service = None
+        
+        # Load initial news data if news service is available
+        if news_service:
+            news_service.load_news_data()
+            logger.info("News data loaded")
         
     except Exception as e:
         logger.error(f"Startup error: {e}")
+        import traceback
+        logger.error(f"Startup error traceback: {traceback.format_exc()}")
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -89,7 +101,7 @@ async def health_check():
         db.close()
         
         # Check LLM service
-        llm_status = "available" if llm_service else "unavailable"
+        llm_status = "available" if llm_service and hasattr(llm_service, 'client') else "unavailable"
         
         return HealthResponse(
             status="healthy",
@@ -123,7 +135,11 @@ async def query_news(query_data: NewsQuery, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="User longitude must be between -180 and 180")
         
         # Analyze the query using LLM
-        analysis = llm_service.analyze_query(query_data.query)
+        if llm_service:
+            analysis = llm_service.analyze_query(query_data.query)
+        else:
+            # Fallback to simple search if LLM service unavailable
+            analysis = {"intent": "search", "entities": [query_data.query], "confidence": 0.5}
         
         # Get articles based on intent
         articles = news_service.get_articles_by_intent(
@@ -174,6 +190,11 @@ async def get_news_by_category(
     request_id = str(uuid.uuid4())
     
     try:
+        # Check if news service is initialized
+        if news_service is None:
+            logger.error("News service not initialized")
+            raise HTTPException(status_code=500, detail="News service not available")
+            
         if not category or category.strip() == "":
             raise HTTPException(status_code=400, detail="Category parameter is required")
         
@@ -232,6 +253,11 @@ async def search_news(
     request_id = str(uuid.uuid4())
     
     try:
+        # Check if news service is initialized
+        if news_service is None:
+            logger.error("News service not initialized")
+            raise HTTPException(status_code=500, detail="News service not available")
+            
         if not query or query.strip() == "":
             raise HTTPException(status_code=400, detail="Search query is required")
         

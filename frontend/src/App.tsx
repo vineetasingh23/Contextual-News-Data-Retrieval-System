@@ -34,14 +34,22 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
+      {/* Background decoration */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-gradient-to-br from-blue-400/20 to-purple-400/20 rounded-full blur-3xl"></div>
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-gradient-to-tr from-indigo-400/20 to-pink-400/20 rounded-full blur-3xl"></div>
+      </div>
+      
       <Header onSetLocation={handleSetLocation} />
       
-      <div className="flex">
+      <div className="flex relative z-10">
         <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
         
-        <main className="flex-1 bg-gray-50 min-h-screen">
-          {renderActiveTab()}
+        <main className="flex-1 min-h-screen p-6">
+          <div className="max-w-7xl mx-auto">
+            {renderActiveTab()}
+          </div>
         </main>
       </div>
     </div>
